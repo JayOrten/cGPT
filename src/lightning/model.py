@@ -7,8 +7,8 @@ from transformers import (
     LlamaConfig as HFConfig
 )
 
-from nltk.translate.chrf_score import corpus_chrf
-from nltk.translate.bleu_score import corpus_bleu
+from sacrebleu.metrics import BLEU, CHRF
+from torchmetrics import Accuracy
 
 # Use a lower precision for better performance
 torch.set_float32_matmul_precision('medium')
@@ -46,13 +46,7 @@ class Model(LightningModule):
         return self.model(**inputs)
     
     def training_step(self, batch, batch_idx):
-        x, x_mask, y_true = batch
-
-        output = self.model(input_ids=x, 
-                            attention_mask=x_mask, 
-                            labels=y_true)
-
-        loss = output.loss
+        loss, _ = self.step(batch)
 
         self.log('train_loss', 
                  loss, 
@@ -63,30 +57,13 @@ class Model(LightningModule):
                  sync_dist=True)
         
         return loss
-
+    
     def validation_step(self, batch, batch_idx):
-        x, x_mask, y_true = batch
+        loss, y_hat = self.step(batch)
 
-        output = self.model(input_ids=x, 
-                            attention_mask=x_mask, 
-                            labels=y_true)
-        
-        val_loss = output.loss
-        y_hat = output.logits
-
-        if self.config.save_predictions_during_training:
-            # Decode predictions and add to valuation predictions list
-            probs = torch.softmax(y_hat, dim=2)
-            preds = torch.argmax(probs, 2).detach().cpu().tolist()
-
-            #y_true_decoded = self.tokenizer.decode(y_true[0].tolist())
-            decoded = self.tokenizer.decode(preds[0])
-
-            self.validation_step_outputs.append(decoded)
-
-        perplexity = torch.exp(val_loss)
+        perplexity = torch.exp(loss)
         self.log('val_loss', 
-                 val_loss, 
+                 loss, 
                  on_step=False, 
                  on_epoch=True, 
                  prog_bar=True, 
@@ -101,10 +78,23 @@ class Model(LightningModule):
                  logger=True, 
                  sync_dist=True)
             
-        return val_loss
+        return loss
     
     def on_validation_epoch_end(self) -> None:
         if self.config.save_predictions_during_training == True:
+            initial_input = self.tokenizer.encode("e4", return_tensors='pt')
+            # Generate a test prediction and save output
+            # This is useful for debugging and checking model performance
+            generate_tokens = self.model.generate(
+                initial_input,
+                do_sample=True,
+                max_length=100,
+                pad_token_id=self.config.pad_id,
+            )
+
+            decoded = self.tokenizer.decode(generate_tokens[0].tolist())
+
+            # Save out to file
             dir_path = Path(self.config.default_root_dir)
             file_path = dir_path / 'validation_predictions.txt'
 
@@ -113,11 +103,10 @@ class Model(LightningModule):
 
             # Check if the file exists. If not, create it and append the outputs
             with file_path.open('a', encoding="utf-8") as f:
-                for item in self.validation_step_outputs:
-                    f.write(str(self.current_epoch) + ': ')
-                    f.write(str(item) + '\n')
-
-            self.validation_step_outputs.clear()
+                f.write("Step " + str(self.global_step) + "tokens : ")
+                f.write(str(generate_tokens) + '\n')
+                f.write("Step " + str(self.global_step) + "generation : ")
+                f.write(str(decoded) + '\n')
     
     def on_test_start(self,):
         # Create data structures to store predictions
@@ -148,7 +137,6 @@ class Model(LightningModule):
         # Save predictions
         dir_path = Path(self.config.default_root_dir)
         targets_path = dir_path / 'test_targets.txt'
-        predictions_path = dir_path / 'test_predictions.txt'
 
         # Check if the directory exists. If not, create it
         dir_path.mkdir(parents=True, exist_ok=True)
@@ -158,30 +146,78 @@ class Model(LightningModule):
             for item in self.y_trues:
                 f.write(item + '\n')
 
-        with predictions_path.open('a', encoding="utf-8") as f:
-            for item in self.y_hats:
-                f.write(item + '\n')
-                    
-        # Get chrf score
-        chrf = corpus_chrf(self.y_trues, self.y_hats)
+        bleu = BLEU()
+        chrf = CHRF()
 
-        # Get bleu score
-        bleu = corpus_bleu([[tgt] for tgt in self.y_trues], self.y_hats)
+        # # Get bleu score
+        bleu = bleu.corpus_score(self.y_hats, [self.y_trues])
+
+        # # Get chrf score
+        chrf = chrf.corpus_score(self.y_hats, [self.y_trues])
+
+        # Get accuracy
+        accuracy = Accuracy()
+        acc = accuracy(self.y_hats, self.y_trues)
 
         self.log('chrf', 
-                 chrf, 
+                 chrf.score, 
                  logger=True, 
                  sync_dist=True)
         self.log('bleu', 
-                 bleu,
+                 bleu.score,
+                 logger=True, 
+                 sync_dist=True)
+        self.log('accuracy', 
+                 acc, 
                  logger=True, 
                  sync_dist=True)
 
-        scores = ['chrf: ' + str(chrf), 'bleu: ' + str(bleu)]
+        scores = ['chrf: ' + str(chrf.score), 'bleu: ' + str(bleu.score), 'accuracy: ' + str(acc)]
+        print(scores)
 
-        print('Final scores: ', scores)
+    def step(self, batch):
+        """
+        Perform a forward pass and calculate loss.
+
+        The behaviour at this step depends on the model being used.
+        For instance, some HuggingFace models, such as Llama, will compute the shifted labels internally,
+        meaning labels should be equivalent to input_ids, after which the loss is calculated internally.
+
+        It's also possible to not pass labels, and compute the loss here instead.
+        """
+        x, x_mask, y_true = batch
+
+        output = self.model(input_ids=x, 
+                            attention_mask=x_mask)
+        
+        y_hat = output.logits
+
+        print(y_hat.shape)
+        print(y_true.shape)
+
+        # Compute cross entropy loss
+        loss = torch.nn.functional.cross_entropy(y_hat.permute(0,2,1), y_true, ignore_index=self.config.pad_id)
+
+        return loss, y_hat
     
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.config.lr)
         lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, self.config.gamma)
         return [optimizer], [lr_scheduler]
+    
+    def monitor_gpu_memory(self):
+        """
+        Monitor GPU memory usage. Useful for debugging, checking GPU utilization.
+        """
+        print("torch.cuda.memory_allocated: %fGB"%(torch.cuda.memory_allocated(0)/1024/1024/1024))
+        print("torch.cuda.memory_reserved: %fGB"%(torch.cuda.memory_reserved(0)/1024/1024/1024))
+        print("torch.cuda.max_memory_reserved: %fGB"%(torch.cuda.max_memory_reserved(0)/1024/1024/1024))
+
+    def is_illegal(self, board, move):
+        try:
+            if board.parse_san(move) in board.legal_moves:
+                return False
+            else:
+                return True
+        except:
+            return True
