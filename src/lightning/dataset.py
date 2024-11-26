@@ -105,7 +105,11 @@ class DataSet(torch.utils.data.IterableDataset):
 
         for index, item in enumerate(data):
             if index % (num_workers * world_size) == (process_rank * num_workers + worker_id):
+                if item[1].values[0] is None:
+                    print('BAD ITEM!')
+                    continue
                 item = item[1].values[0].tolist()
+
                 if len(item) <= self.max_sequence_embeddings:
                     length = len(item)
                     #item = np.append(item, self.eos_tok)
