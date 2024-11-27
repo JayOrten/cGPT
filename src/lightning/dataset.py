@@ -112,7 +112,6 @@ class DataSet(torch.utils.data.IterableDataset):
 
                 if len(item) <= self.max_sequence_embeddings:
                     length = len(item)
-                    #item = np.append(item, self.eos_tok)
                     x = item[:length-1]
                     y_true = item[1:length]  
                 else:
