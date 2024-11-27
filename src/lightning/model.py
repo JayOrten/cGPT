@@ -82,7 +82,8 @@ class Model(LightningModule):
     
     def on_validation_epoch_end(self) -> None:
         if self.config.save_predictions_during_training == True:
-            initial_input = self.tokenizer.encode("e4", return_tensors='pt')
+            initial_input = self.tokenizer.encode("e4", bos=True, eos=False)
+            initial_input = torch.tensor(initial_input).unsqueeze(0).to(self.device)
             # Generate a test prediction and save output
             # This is useful for debugging and checking model performance
             generate_tokens = self.model.generate(
@@ -191,9 +192,6 @@ class Model(LightningModule):
                             attention_mask=x_mask)
         
         y_hat = output.logits
-
-        print(y_hat.shape)
-        print(y_true.shape)
 
         # Compute cross entropy loss
         loss = torch.nn.functional.cross_entropy(y_hat.permute(0,2,1), y_true, ignore_index=self.config.pad_id)
