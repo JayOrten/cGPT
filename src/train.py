@@ -98,7 +98,10 @@ def train(config):
         # Print out config parameters in .out file
         print(config)
         
-    trainer.fit(model, datamodule=dm)
+    if config.checkpoint_path:
+        trainer.fit(model, datamodule=dm, ckpt_path=config.checkpoint_path)
+    else:
+        trainer.fit(model, datamodule=dm)
 
     print("\nNo errors!\n")
 
