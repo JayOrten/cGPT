@@ -131,37 +131,38 @@ class ChessInference:
     def gpt_move(self, model, current_sequence):
         new_sequence = list(current_sequence)
         current_sequence_length = len(current_sequence)
-        # print('new_sequence: ', new_sequence)
         string_sequence= ' '.join(new_sequence)
-        # print('string_sequence: ', string_sequence)
 
         # Tokenize prompt
         if isinstance(self.tokenizer, SPTokenizer):
             prompt_tokens = torch.tensor(self.tokenizer.encode(string_sequence, bos=True, eos=False)).reshape(1,-1)
+            pad_id = self.tokenizer.pad_id
+            eos_id = self.tokenizer.eos_id
+            bos_id = self.tokenizer.bos_id
         elif isinstance(self.tokenizer, HFTokenizer):
             prompt_tokens = self.tokenizer.encode(string_sequence, return_tensors="pt")
+            pad_id = self.tokenizer.pad_token_id
+            eos_id = self.tokenizer.eos_token_id
+            bos_id = self.tokenizer.bos_token_id
 
-        # print('prompt_tokens: ', prompt_tokens)
-
+        # Return top 10 beams
         generate_ids = model.generate(input_ids=prompt_tokens.to(device), 
                                     max_new_tokens=6, 
                                     num_beams=10,
                                     # temperature=self.config.temperature, 
-                                    # top_p=self.config.top_p, 
+                                    # top_k=5, 
                                     # repetition_penalty=self.config.repetition_penalty, 
-                                    do_sample=True)
-        # print('generate_ids: ', generate_ids)
+                                    do_sample=True,
+                                    pad_token_id=pad_id,
+                                    eos_token_id=eos_id,
+                                    bos_token_id=bos_id)
+        
         generate_tokens = generate_ids.tolist()
-        # print(generate_tokens)
 
         if isinstance(self.tokenizer, SPTokenizer):
             decoded = self.tokenizer.decode(generate_tokens)
         elif isinstance(self.tokenizer, HFTokenizer):
             decoded = self.tokenizer.decode(generate_tokens[0], skip_special_tokens=True)
-
-        # print('decoded: ', decoded)
-
-        # print('decoded.split: ', decoded[0].split(' ')[current_sequence_length])
 
         # If it predicts padding as the next token, just get the last token in the list
         if len(decoded[0].split(' ')) <= current_sequence_length:
@@ -185,8 +186,10 @@ class ChessInference:
         ax.plot(range(num_moves//2), model_1_incorrect[:num_moves//2], label="model_1")
         ax.plot(range(num_moves//2), model_2_incorrect[:num_moves//2], label="model_2")
         plt.legend()
+        
+        date_time_str = time.strftime("%Y-%m-%d_%H-%M-%S")
         # Save to unique generated filename based on time stamp
-        plt.savefig(f'/home/jo288/nobackup/autodelete/cGPT/figures/{time.time()}.png')
+        plt.savefig(f'/home/jo288/nobackup/autodelete/cGPT/figures/{date_time_str}.png')
 
 
 # For running multiple games for analysis
@@ -203,7 +206,7 @@ def main():
     model_1_incorrect_games = []
     model_2_incorrect_games = []
 
-    for _ in range(10):
+    for _ in range(3):
         ci = ChessInference(config)
         m1, m2 = ci.run_inference()
         model_1_incorrect_games.append(m1)
@@ -217,7 +220,8 @@ def main():
         ax.plot(range(len(game)), game)
     
     # Save plot
-    plt.savefig(f'/home/jo288/nobackup/autodelete/cGPT/figures/{time.time()}_full.png')
+    date_time_str = time.strftime("%Y-%m-%d_%H-%M-%S")
+    plt.savefig(f'/home/jo288/nobackup/autodelete/cGPT/figures/{date_time_str}_full.png')
 
 
 if __name__ == "__main__":
