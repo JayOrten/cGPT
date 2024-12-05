@@ -71,7 +71,7 @@ class ChessInference:
 
             if board.is_game_over():
                 break
-            if num_moves >= 150:
+            if num_moves >= 500:
                 print('MAX MOVES REACHED')
                 break
 
@@ -80,7 +80,7 @@ class ChessInference:
             model_2_incorrect.append(num_incorrect)
             num_moves += 1
 
-            if num_moves >= 100:
+            if num_moves >= 500:
                 print('MAX MOVES REACHED')
                 break
 
@@ -108,27 +108,27 @@ class ChessInference:
 
 
     def make_move(self, model, current_sequence, board):
-        num_incorrect = 0
+        # First, check if greedy move is legal
+        k = 1
         while True:
-            move= self.gpt_move(model, current_sequence)
-            print('Computer move: ', move)
-            if self.is_illegal(board, move):
-                # print('Computer selected illegal move.')
-                num_incorrect += 1
-    
-                if num_incorrect >= 10:
-                    move = board.san(random.choice(list(board.legal_moves)))
-                    print('Selected random move: ', move)
-                else:
-                    continue
-            current_sequence.append(move)
-            board.push_san(move)
-            print(board)
-            break
+            print('k: ', k)
+            move = self.gpt_move(model, current_sequence, do_sample=True, top_k=k)
+            if not self.is_illegal(board, move):
+                break
+            k += 1
+            if k > 700:
+                move = board.san(random.choice(list(board.legal_moves)))
+                print('Selected random move: ', move)
+                break
 
-        return current_sequence, board, num_incorrect
+        current_sequence.append(move)
+        board.push_san(move)
+        print('---')
+        print(board)
 
-    def gpt_move(self, model, current_sequence):
+        return current_sequence, board, k
+
+    def gpt_move(self, model, current_sequence, do_sample=True, top_k=1):
         new_sequence = list(current_sequence)
         current_sequence_length = len(current_sequence)
         string_sequence= ' '.join(new_sequence)
@@ -148,11 +148,11 @@ class ChessInference:
         # Return top 10 beams
         generate_ids = model.generate(input_ids=prompt_tokens.to(device), 
                                     max_new_tokens=6, 
-                                    num_beams=10,
                                     # temperature=self.config.temperature, 
                                     # top_k=5, 
                                     # repetition_penalty=self.config.repetition_penalty, 
-                                    do_sample=True,
+                                    do_sample=do_sample,
+                                    top_k=top_k,
                                     pad_token_id=pad_id,
                                     eos_token_id=eos_id,
                                     bos_token_id=bos_id)
@@ -169,7 +169,6 @@ class ChessInference:
             return decoded[0].split(' ')[-1]
         else:
             return decoded[0].split(' ')[current_sequence_length]
-
 
     def is_illegal(self, board, move):
         try:
