@@ -32,3 +32,13 @@ TODO:
 - test the two different vocabs
 - Fix the generation method
 - Create api.
+
+Implemented generation method that greedly picks highest scored predicition tokens, and iteratively drops them down until a valid move is found. Unfortunately, this breaks with some moves, like castling. It also appears that the model is incredibly confident when it's wrong. A better generation approach is probably to sample greedy first, and then continue to sample with decreasing top-p until a legal move is found.
+
+### 12/4/24
+
+Bagged my custom decoding method, and implemented greedy + top-p. Seems to work better
+
+Setup lichess bot and tested with first trained model.
+
+Began testing alternative tokenizer
